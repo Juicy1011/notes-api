@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        id: lint
+        run: npm run lint
+
+      - name: Unit tests
+        id: test
+        run: |
+          set -o pipefail
+          npm test -- --test-reporter=tap | tee test-output.txt
+
+      - name: Publish results to the run summary
+        if: always()
+        run: |
+          PASS=$(grep -E '^# pass' test-output.txt 2>/dev/null | awk '{print $3}')
+          FAIL=$(grep -E '^# fail' test-output.txt 2>/dev/null | awk '{print $3}')
+          {
+            echo "## Lint and test results"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|---|---|"
+            echo "| Commit | \`${GITHUB_SHA::7}\` on \`${GITHUB_REF_NAME}\` |"
+            echo "| Triggered by | ${GITHUB_ACTOR} |"
+            echo "| Lint | ${{ steps.lint.outcome }} |"
+            echo "| Unit tests | ${{ steps.test.outcome }} |"
+            echo "| Tests passed | ${PASS:-n/a} |"
+            echo "| Tests failed | ${FAIL:-n/a} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  docker-build:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull code
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t notes-api:${{ github.sha }} .
+
+      - name: Publish image metrics to the run summary
+        run: |
+          BYTES=$(docker image inspect notes-api:${{ github.sha }} --format '{{.Size}}')
+          {
+            echo "## Docker build"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|---|---|"
+            echo "| Commit | \`${GITHUB_SHA::7}\` |"
+            echo "| Image size | $((BYTES / 1000000)) MB |"
+          } >> "$GITHUB_STEP_SUMMARY"
